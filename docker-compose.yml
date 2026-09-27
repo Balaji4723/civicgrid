@@ -1,0 +1,36 @@
+services:
+  db:
+    build: ./db                     # postgres:16 + PostGIS (see db/Dockerfile)
+    image: civicgrid-db:postgis16
+    environment:
+      POSTGRES_USER: civicgrid
+      POSTGRES_PASSWORD: civicgrid
+      POSTGRES_DB: civicgrid
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U civicgrid -d civicgrid"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://civicgrid:civicgrid@db:5432/civicgrid
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      # Phase 2: the demo workflow needs REAL uploaded files. false would re-enable the legacy note-only / typed-audit paths.
+      REQUIRE_FILE_EVIDENCE: "true"
+      EVIDENCE_STORAGE_BACKEND: local
+      EVIDENCE_STORAGE_DIR: /data/evidence
+      EVIDENCE_MAX_IMAGE_BYTES: "10485760"     # 10 MB
+      EVIDENCE_MAX_VIDEO_BYTES: "52428800"     # 50 MB
+    depends_on:
+      db: { condition: service_healthy }
+    ports: ["8000:8000"]
+    volumes: [evidence_data:/data/evidence]     # uploaded evidence files; the DB holds only metadata + SHA-256
+    # entrypoint: migrations -> seed (first boot only) -> load/refresh wards -> route legacy reports -> serve API.
+
+volumes:
+  pgdata:
+  evidence_data:

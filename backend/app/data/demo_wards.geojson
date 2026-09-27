@@ -1,0 +1,43 @@
+{
+  "type": "FeatureCollection",
+  "civicgrid_source": {
+    "name": "CivicGrid synthetic demo wards",
+    "version": "demo-1",
+    "is_official": false,
+    "label": "DEMO DATA — NOT OFFICIAL MUNICIPAL BOUNDARIES",
+    "license": "Synthetic. Drawn by hand for this prototype; contains no third-party or government data.",
+    "note": "Irregular polygons chosen so point-in-polygon can be told apart from a bounding-box test. Ward A and B share an edge on purpose."
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "code": "DEMO-A", "name": "Demo Ward A",
+        "queue": {"code": "DEMO-Q-A", "name": "Demo Ward A Sanitation Team", "description": "Synthetic demo queue"}
+      },
+      "geometry": {"type": "Polygon", "coordinates": [[
+        [72.850, 19.060], [72.880, 19.060], [72.882, 19.075], [72.878, 19.090], [72.862, 19.092], [72.850, 19.080], [72.850, 19.060]
+      ]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "code": "DEMO-B", "name": "Demo Ward B",
+        "queue": {"code": "DEMO-Q-B", "name": "Demo Ward B Sanitation Team", "description": "Synthetic demo queue"}
+      },
+      "geometry": {"type": "Polygon", "coordinates": [[
+        [72.880, 19.060], [72.915, 19.058], [72.918, 19.075], [72.910, 19.092], [72.878, 19.090], [72.882, 19.075], [72.880, 19.060]
+      ]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "code": "DEMO-C", "name": "Demo Ward C",
+        "queue": {"code": "DEMO-Q-C", "name": "Demo Ward C Sanitation Team", "description": "Synthetic demo queue"}
+      },
+      "geometry": {"type": "Polygon", "coordinates": [[
+        [72.860, 19.100], [72.900, 19.100], [72.905, 19.120], [72.885, 19.135], [72.865, 19.128], [72.860, 19.100]
+      ]]}
+    }
+  ]
+}
