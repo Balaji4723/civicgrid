@@ -133,7 +133,6 @@ export default function WorkerPortal() {
   const [tripCompleted, setTripCompleted] = useState(false);
   const [completedSnapshot, setCompletedSnapshot] = useState<RouteView | null>(null);
   const [ackBusy, setAckBusy] = useState(false);
-  const [declaredQuantity, setDeclaredQuantity] = useState<number | string>(520);
 
   useEffect(() => {
     if (!rawData) return;
@@ -375,7 +374,7 @@ export default function WorkerPortal() {
     try {
       const sealedLoad = await api<LoadRow>("/worker/trip/complete", {
         method: "POST",
-        body: { declared_quantity_kg: declaredQuantity ? Number(declaredQuantity) : 520 },
+        body: {},
       });
       const snapshot: RouteView = {
         ...data,
@@ -507,7 +506,7 @@ export default function WorkerPortal() {
                         {data.trip?.trip_code ?? "—"}
                       </p>
                       <p className="text-[11px] text-ink-soft">
-                        Status: <span className="font-semibold text-track-700">{data.trip?.status ?? "IN_PROGRESS"}</span>
+                        Status: <span className="font-semibold text-track-700">{isLoadDeclared ? "COMPLETED" : (data.trip?.status ?? "IN_PROGRESS")}</span>
                       </p>
                     </div>
                   </div>
@@ -791,86 +790,48 @@ export default function WorkerPortal() {
                 </div>
               </Card>
 
-              {/* SHIFT SUMMARY & TRIP COMPLETION */}
-              <Card
-                tone="track"
-                title={isLoadDeclared ? "Shift Summary" : isAllMarked ? "Collection Complete" : "Shift Summary & Trip Completion"}
-              >
-                <div className="space-y-4">
-                  <div className="rounded-xl bg-paper/80 p-4 border border-line/60">
-                    <p className="text-xs font-semibold text-ink-soft uppercase tracking-wider">Shift Summary</p>
-                    <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5 text-sm">
-                      <div>
-                        <dt className="text-xs text-ink-soft">Households Visited</dt>
-                        <dd className="font-bold text-ink mt-0.5">
-                          {marked} / {total}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-xs text-ink-soft">Segregated</dt>
-                        <dd className="font-bold text-ok-700 mt-0.5">{segregatedCount}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-xs text-ink-soft">Unsegregated</dt>
-                        <dd className="font-bold text-flag-700 mt-0.5">{unsegregatedCount}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-xs text-ink-soft">Collection Progress</dt>
-                        <dd className="font-bold text-ink mt-0.5">{progressPct}%</dd>
-                      </div>
-                      <div>
-                        <dt className="text-xs text-ink-soft">Trip Status</dt>
-                        <dd className="font-bold text-track-700 mt-0.5">
-                          {isLoadDeclared ? "COMPLETED" : (data.trip?.status ?? "IN_PROGRESS")}
-                        </dd>
-                      </div>
-                    </dl>
-                  </div>
-
-                  {!isLoadDeclared && (
-                    <>
-                      <div className="rounded-xl bg-paper/80 p-4 border border-line/60">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="space-y-0.5">
-                            <div className="flex items-center gap-2">
-                              <label className="text-xs font-semibold text-ink-soft uppercase tracking-wider block">
-                                Collection-side Declared Quantity
-                              </label>
-                              <span className="rounded bg-track-100 px-1.5 py-0.5 text-[10px] font-bold text-track-800">
-                                System Estimate
-                              </span>
-                            </div>
-                            <p className="text-xs text-ink-soft">
-                              Estimated load quantity based on route history • Final physical quantity verified at receiving weighbridge.
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2 rounded-xl border border-line bg-surface px-4 py-2">
-                            <span className="font-mono text-base font-bold text-ink">520</span>
-                            <span className="text-xs font-bold text-ink-soft">kg (est.)</span>
-                          </div>
+              {/* TRIP COMPLETION & AUTOMATIC DIGITAL LOAD CREATION */}
+              {isAllMarked && !isLoadDeclared && (
+                <Card tone="track" title="Collection Complete">
+                  <div className="space-y-4">
+                    <div className="rounded-xl bg-paper/80 p-4 border border-line/60">
+                      <p className="text-xs font-semibold text-ink-soft uppercase tracking-wider">Shift Summary</p>
+                      <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 text-sm">
+                        <div>
+                          <dt className="text-xs text-ink-soft">Households Serviced</dt>
+                          <dd className="font-bold text-ink mt-0.5">{total}</dd>
                         </div>
-                      </div>
+                        <div>
+                          <dt className="text-xs text-ink-soft">Segregated</dt>
+                          <dd className="font-bold text-ok-700 mt-0.5">{segregatedCount}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-ink-soft">Unsegregated</dt>
+                          <dd className="font-bold text-flag-700 mt-0.5">{unsegregatedCount}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-ink-soft">Assigned Vehicle</dt>
+                          <dd className="font-bold text-ink mt-0.5">{data.vehicle?.registration_number ?? "MH-01-AB-1234"}</dd>
+                        </div>
+                      </dl>
+                    </div>
 
-                      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
-                        <p className="text-xs text-ink-soft">
-                          {isAllMarked
-                            ? "All assigned households collected. Completing the trip seals the collection trail with the declared estimate and queues the Digital Load for weighbridge receiving intake."
-                            : `Collect all ${total} assigned households before completing the trip (${total - marked} household${total - marked === 1 ? "" : "s"} remaining).`}
-                        </p>
-                        <Btn
-                          tone="track"
-                          busy={completing}
-                          disabled={!isAllMarked || completing || isTripPaused}
-                          onClick={handleCompleteCollectionTrip}
-                        >
-                          <PackageCheck className="mr-1.5 h-4 w-4" />
-                          Complete Collection Trip
-                        </Btn>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </Card>
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+                      <p className="text-xs text-ink-soft">
+                        All assigned households collected. Completing the trip seals the collection trail and queues the Digital Load for weighbridge receiving intake. Zero worker weight input required.
+                      </p>
+                      <Btn
+                        tone="track"
+                        busy={completing}
+                        onClick={handleCompleteCollectionTrip}
+                      >
+                        <PackageCheck className="mr-1.5 h-4 w-4" />
+                        Complete Collection Trip
+                      </Btn>
+                    </div>
+                  </div>
+                </Card>
+              )}
 
               {/* DIGITAL LOAD SEALED & AWAITING RECEIVING */}
               {isLoadDeclared && (
@@ -890,7 +851,7 @@ export default function WorkerPortal() {
                         </h3>
                       </div>
 
-                      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-5 rounded-xl bg-paper/60 p-3.5 border border-line/60 text-xs">
+                      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4 rounded-xl bg-paper/60 p-3.5 border border-line/60 text-xs">
                         <div>
                           <dt className="text-ink-soft">Route Jurisdiction</dt>
                           <dd className="font-bold text-ink mt-0.5">{cleanLabel(data.route.ward)}</dd>
@@ -904,17 +865,13 @@ export default function WorkerPortal() {
                           <dd className="font-mono font-bold text-ink mt-0.5">{data.trip?.trip_code ?? "—"}</dd>
                         </div>
                         <div>
-                          <dt className="text-ink-soft">Declared Quantity</dt>
-                          <dd className="font-bold text-ink mt-0.5">{data.active_load?.declared_quantity_kg ?? declaredQuantity ?? 520} kg <span className="text-[11px] font-normal text-ink-soft">(Est.)</span></dd>
-                        </div>
-                        <div>
                           <dt className="text-ink-soft">Load Status</dt>
                           <dd className="font-bold text-track-700 mt-0.5">AWAITING RECEIVING</dd>
                         </div>
                       </dl>
 
                       <p className="text-xs text-ink-soft leading-relaxed">
-                        Collection trip completed. Digital Load <strong className="font-mono text-ink font-bold">{data.active_load?.id}</strong> has been sealed with Collection-side Declared Quantity <strong className="font-mono text-ink font-bold">{data.active_load?.declared_quantity_kg ?? declaredQuantity ?? 520} kg (System-Generated Estimate)</strong> (Final physical quantity verified at receiving) and is awaiting receiving intake at the facility weighbridge.
+                        Collection trip completed. Digital Load <strong className="font-mono text-ink font-bold">{data.active_load?.id}</strong> has been sealed and is awaiting receiving intake at the facility weighbridge.
                       </p>
                     </div>
                   </div>
@@ -994,7 +951,7 @@ export default function WorkerPortal() {
                     </div>
                     <div className="rounded-xl bg-paper/60 p-3 border border-line/60">
                       <dt className="text-ink-soft">Shift Status</dt>
-                      <dd className="font-bold text-ok-700 mt-0.5">{data.trip.status === "COMPLETED" ? "Sealed / Complete" : "In Progress"}</dd>
+                      <dd className="font-bold text-ok-700 mt-0.5">{isLoadDeclared || data.trip.status === "COMPLETED" ? "Sealed / Complete" : "In Progress"}</dd>
                     </div>
                   </dl>
                 </Card>
