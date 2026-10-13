@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -15,6 +16,49 @@ from .models import (
     Audit, AuditMethod, AuditStatus, CollectionEvent, CollectionStatus, CollectionTrip, Condition, DigitalLoad, DiscrepancyEvent, DiscrepancyStatus,
     DiscrepancyType, Household, LoadStatus, ReceivingRecord, Route, TripCrew, Vehicle, Worker, utcnow,
 )
+
+
+def normalize_session_id(session_id: Optional[str]) -> Optional[str]:
+    if not session_id:
+        return None
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]", "", session_id.strip())[:32]
+    return cleaned or None
+
+
+def crew_role_for_session(session_id: Optional[str]) -> str:
+    sid = normalize_session_id(session_id)
+    return f"CREW_LEAD:{sid}" if sid else "CREW_LEAD"
+
+
+def is_load_in_session(db: Session, load_id: Optional[str], session_id: Optional[str]) -> bool:
+    if not load_id:
+        return True
+    try:
+        num = int(load_id.split("-")[1])
+        if num <= 1021:
+            return True
+    except (IndexError, ValueError):
+        return True
+    load = db.get(DigitalLoad, load_id)
+    if not load or not load.trip_id:
+        return False
+    sid = normalize_session_id(session_id)
+    role = crew_role_for_session(sid)
+    has_crew = db.scalar(
+        select(TripCrew.id).where(TripCrew.trip_id == load.trip_id, TripCrew.role_in_crew == role)
+    )
+    if not has_crew:
+        return False
+    if not sid and load.generated_at:
+        gen_dt = load.generated_at
+        now_dt = utcnow()
+        if gen_dt.tzinfo is None and now_dt.tzinfo is not None:
+            now_dt = now_dt.replace(tzinfo=None)
+        elif gen_dt.tzinfo is not None and now_dt.tzinfo is None:
+            gen_dt = gen_dt.replace(tzinfo=None)
+        if (now_dt - gen_dt).total_seconds() > 300:
+            return False
+    return True
 
 
 def next_load_id(db: Session) -> str:
@@ -72,27 +116,44 @@ def get_load_or_404(db: Session, load_id: str, lock: bool = False) -> DigitalLoa
     return load
 
 
-def active_load_for_route(db: Session, route_id: int) -> Optional[DigitalLoad]:
-    return db.execute(
-        select(DigitalLoad)
-        .where(DigitalLoad.route_id == route_id, DigitalLoad.status == LoadStatus.COLLECTING)
-        .order_by(DigitalLoad.generated_at.desc())
-    ).scalars().first()
+def active_load_for_route(db: Session, route_id: int, session_id: Optional[str] = None) -> Optional[DigitalLoad]:
+    sid = normalize_session_id(session_id)
+    stmt = select(DigitalLoad).where(DigitalLoad.route_id == route_id, DigitalLoad.status == LoadStatus.COLLECTING)
+    if sid:
+        stmt = stmt.join(TripCrew, TripCrew.trip_id == DigitalLoad.trip_id).where(
+            TripCrew.role_in_crew == crew_role_for_session(sid)
+        )
+    else:
+        stmt = stmt.join(TripCrew, TripCrew.trip_id == DigitalLoad.trip_id, isouter=True).where(
+            (TripCrew.role_in_crew == "CREW_LEAD") | (TripCrew.role_in_crew.is_(None))
+        )
+    return db.execute(stmt.order_by(DigitalLoad.generated_at.desc())).scalars().first()
 
 
-def active_trip_for_route(db: Session, route_id: int) -> Optional[CollectionTrip]:
-    return db.execute(
-        select(CollectionTrip)
-        .where(CollectionTrip.route_id == route_id, CollectionTrip.status.in_(["IN_PROGRESS", "VERIFICATION_PAUSED"]))
-        .order_by(CollectionTrip.start_time.desc())
-    ).scalars().first()
+def active_trip_for_route(db: Session, route_id: int, session_id: Optional[str] = None) -> Optional[CollectionTrip]:
+    sid = normalize_session_id(session_id)
+    stmt = select(CollectionTrip).where(
+        CollectionTrip.route_id == route_id,
+        CollectionTrip.status.in_(["IN_PROGRESS", "VERIFICATION_PAUSED"]),
+    )
+    if sid:
+        stmt = stmt.join(TripCrew, TripCrew.trip_id == CollectionTrip.id).where(
+            TripCrew.role_in_crew == crew_role_for_session(sid)
+        )
+    else:
+        stmt = stmt.join(TripCrew, TripCrew.trip_id == CollectionTrip.id, isouter=True).where(
+            (TripCrew.role_in_crew == "CREW_LEAD") | (TripCrew.role_in_crew.is_(None))
+        )
+    return db.execute(stmt.order_by(CollectionTrip.start_time.desc())).scalars().first()
 
 
-def get_or_create_active_trip(db: Session, route_id: int, worker_id: int, now: Optional[datetime] = None) -> CollectionTrip:
+def get_or_create_active_trip(
+    db: Session, route_id: int, worker_id: int, now: Optional[datetime] = None, session_id: Optional[str] = None
+) -> CollectionTrip:
     now = now or utcnow()
-    trip = active_trip_for_route(db, route_id)
+    trip = active_trip_for_route(db, route_id, session_id=session_id)
     if trip is None:
-        veh = db.scalars(select(Vehicle).where(Vehicle.status == "ACTIVE")).first()
+        veh = db.get(Vehicle, route_id) or db.scalars(select(Vehicle).where(Vehicle.status == "ACTIVE")).first()
         veh_id = veh.id if veh else None
         # Use MAX(id) so trip codes never collide with seeded rows regardless of count
         max_id = db.scalar(select(func.max(CollectionTrip.id))) or 0
@@ -110,18 +171,25 @@ def get_or_create_active_trip(db: Session, route_id: int, worker_id: int, now: O
         )
         db.add(trip)
         db.flush()
-        crew = TripCrew(trip_id=trip.id, worker_id=worker_id, role_in_crew="CREW_LEAD")
+        crew = TripCrew(trip_id=trip.id, worker_id=worker_id, role_in_crew=crew_role_for_session(session_id))
         db.add(crew)
         db.flush()
     return trip
 
 
-def get_or_create_active_load(db: Session, route_id: int, worker_id: int, trip: Optional[CollectionTrip] = None, now: Optional[datetime] = None) -> DigitalLoad:
+def get_or_create_active_load(
+    db: Session,
+    route_id: int,
+    worker_id: int,
+    trip: Optional[CollectionTrip] = None,
+    now: Optional[datetime] = None,
+    session_id: Optional[str] = None,
+) -> DigitalLoad:
     """Gets the currently collecting load for route, or initializes a new DigitalLoad attached to the active trip."""
     now = now or utcnow()
     if trip is None:
-        trip = get_or_create_active_trip(db, route_id, worker_id, now=now)
-    load = active_load_for_route(db, route_id)
+        trip = get_or_create_active_trip(db, route_id, worker_id, now=now, session_id=session_id)
+    load = active_load_for_route(db, route_id, session_id=session_id)
     if load is None:
         route = db.get(Route, route_id)
         load = DigitalLoad(
@@ -189,7 +257,12 @@ def build_declaration(db: Session, load: DigitalLoad) -> dict:
 
 # ---------------------------------------------------------------- worker side
 def record_collection(
-    db: Session, worker: Worker, household_id: int, status: CollectionStatus, now: Optional[datetime] = None
+    db: Session,
+    worker: Worker,
+    household_id: int,
+    status: CollectionStatus,
+    now: Optional[datetime] = None,
+    session_id: Optional[str] = None,
 ) -> tuple[DigitalLoad, CollectionEvent]:
     """Worker records household collection. Links to the vehicle collection trip."""
     if worker.assigned_route_id is None:
@@ -199,11 +272,11 @@ def record_collection(
         raise ServiceError(403, "NOT_ON_ROUTE", "That household is not on your assigned route.")
     now = now or utcnow()
 
-    trip = get_or_create_active_trip(db, worker.assigned_route_id, worker.id, now=now)
+    trip = get_or_create_active_trip(db, worker.assigned_route_id, worker.id, now=now, session_id=session_id)
     if trip.status == "VERIFICATION_PAUSED" and not trip.verification_acknowledged:
         raise ServiceError(409, "VERIFICATION_PAUSED", "Collection is paused for system verification. Please acknowledge protocol before continuing.")
 
-    load = get_or_create_active_load(db, worker.assigned_route_id, worker.id, trip=trip, now=now)
+    load = get_or_create_active_load(db, worker.assigned_route_id, worker.id, trip=trip, now=now, session_id=session_id)
 
     already = db.scalar(select(CollectionEvent.id).where(
         CollectionEvent.load_id == load.id, CollectionEvent.household_id == household_id))
@@ -220,16 +293,18 @@ def record_collection(
     return load, ev
 
 
-def acknowledge_trip_verification(db: Session, worker: Worker, now: Optional[datetime] = None) -> CollectionTrip:
+def acknowledge_trip_verification(
+    db: Session, worker: Worker, now: Optional[datetime] = None, session_id: Optional[str] = None
+) -> CollectionTrip:
     if worker.assigned_route_id is None:
         raise ServiceError(409, "NO_ROUTE", "This worker has no assigned route.")
-    trip = active_trip_for_route(db, worker.assigned_route_id)
+    trip = active_trip_for_route(db, worker.assigned_route_id, session_id=session_id)
     if not trip:
         raise ServiceError(404, "NO_ACTIVE_TRIP", "No active collection trip found.")
     now = now or utcnow()
     trip.verification_acknowledged = True
     trip.status = "IN_PROGRESS"
-    load = active_load_for_route(db, worker.assigned_route_id)
+    load = active_load_for_route(db, worker.assigned_route_id, session_id=session_id)
     if load:
         append_event(db, load.id, "SYSTEM_VERIFICATION_ACKNOWLEDGED",
                      {"trip_code": trip.trip_code, "worker_id": worker.id, "note": "Worker acknowledged system verification protocol."},
@@ -237,7 +312,14 @@ def acknowledge_trip_verification(db: Session, worker: Worker, now: Optional[dat
     return trip
 
 
-def declare_load(db: Session, worker: Worker, load_id: str, quantity_kg: Optional[int] = None, now: Optional[datetime] = None) -> DigitalLoad:
+def declare_load(
+    db: Session,
+    worker: Worker,
+    load_id: str,
+    quantity_kg: Optional[int] = None,
+    now: Optional[datetime] = None,
+    session_id: Optional[str] = None,
+) -> DigitalLoad:
     load = get_load_or_404(db, load_id, lock=True)
     route = db.get(Route, load.route_id)
     if route.worker_id != worker.id:
@@ -251,7 +333,7 @@ def declare_load(db: Session, worker: Worker, load_id: str, quantity_kg: Optiona
     if declaration["households_collected"] == 0:
         raise ServiceError(409, "NOTHING_COLLECTED", "Mark at least one household before declaring the load.")
     load.status = LoadStatus.DECLARED
-    trip = active_trip_for_route(db, load.route_id)
+    trip = db.get(CollectionTrip, load.trip_id) if load.trip_id else active_trip_for_route(db, load.route_id, session_id=session_id)
     if trip:
         trip.status = "COMPLETED"
         trip.end_time = now

@@ -1,6 +1,6 @@
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,6 +13,7 @@ from ..hashchain import list_events
 from .. import settings
 from ..models import CorroborationOutcome, Condition, DiscrepancyEvent, DiscrepancyStatus, Role, User
 from ..serializers import ser_discrepancy, ser_event
+from ..services import is_load_in_session, normalize_session_id
 
 router = APIRouter(prefix="/discrepancy", tags=["discrepancy"])
 staff = require_roles(Role.FACILITY, Role.MUNICIPAL_ADMIN)
@@ -51,11 +52,12 @@ class CloseIn(BaseModel):
 
 
 @router.get("")
-def list_discrepancies(status: Optional[DiscrepancyStatus] = None, user: User = Depends(staff), db: Session = Depends(get_db)):
+def list_discrepancies(request: Request, status: Optional[DiscrepancyStatus] = None, user: User = Depends(staff), db: Session = Depends(get_db)):
+    session_id = normalize_session_id(request.headers.get("X-Demo-Session"))
     stmt = select(DiscrepancyEvent).order_by(DiscrepancyEvent.id)
     if status:
         stmt = stmt.where(DiscrepancyEvent.status == status)
-    return [ser_discrepancy(d) for d in db.scalars(stmt)]
+    return [ser_discrepancy(d) for d in db.scalars(stmt) if is_load_in_session(db, d.load_id, session_id)]
 
 
 @router.get("/{discrepancy_id}")

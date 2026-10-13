@@ -136,39 +136,17 @@ export default function WorkerPortal() {
 
   useEffect(() => {
     if (!rawData) return;
-    const storageKey = `civicgrid_completed_route_${rawData.route.id}`;
-    if (rawData.active_load?.status === "DECLARED") {
-      setCompletedSnapshot(null);
-      setTripCompleted(true);
-      try {
-        localStorage.setItem(storageKey, JSON.stringify(rawData));
-      } catch {
-        // ignore storage errors
-      }
-      return;
-    }
-    const rawMarked = rawData.households.filter((h) => h.status !== "PENDING").length;
-    if (rawMarked > 0 || rawData.active_load?.status === "COLLECTING") {
-      setCompletedSnapshot(null);
-      setTripCompleted(false);
-      try {
-        localStorage.removeItem(storageKey);
-      } catch {
-        // ignore storage errors
-      }
-      return;
-    }
     try {
-      const saved = localStorage.getItem(storageKey);
-      if (saved) {
-        const parsed = JSON.parse(saved) as RouteView;
-        if (parsed?.active_load?.id) {
-          setCompletedSnapshot(parsed);
-          setTripCompleted(true);
-        }
-      }
+      localStorage.removeItem(`civicgrid_completed_route_${rawData.route.id}`);
     } catch {
       // ignore storage errors
+    }
+    if (rawData.active_load?.status === "DECLARED" || rawData.trip?.status === "COMPLETED") {
+      setCompletedSnapshot(null);
+      setTripCompleted(true);
+    } else {
+      setCompletedSnapshot(null);
+      setTripCompleted(false);
     }
   }, [rawData]);
 
@@ -387,11 +365,6 @@ export default function WorkerPortal() {
           : null,
         active_load: sealedLoad,
       };
-      try {
-        localStorage.setItem(`civicgrid_completed_route_${data.route.id}`, JSON.stringify(snapshot));
-      } catch {
-        // ignore storage errors
-      }
       setCompletedSnapshot(snapshot);
       setTripCompleted(true);
       await reload();

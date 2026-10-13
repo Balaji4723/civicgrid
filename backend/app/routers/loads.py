@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -8,7 +8,7 @@ from ..db import get_db
 from ..hashchain import list_events, verify_chain
 from ..models import Condition, DigitalLoad, DiscrepancyEvent, DisposalException, FinalDisposition, Handoff, ProcessingRecord, ReceivingRecord, Role, User
 from ..serializers import ser_discrepancy, ser_event, ser_load_row, ser_receiving
-from ..services import build_declaration, create_receiving_record, get_load_or_404
+from ..services import build_declaration, create_receiving_record, get_load_or_404, is_load_in_session, normalize_session_id
 from .. import disposal_exception as de_svc
 from .. import final_disposition as fd_svc
 from .. import handoff as ho_svc
@@ -24,9 +24,10 @@ class ReceivingIn(BaseModel):
 
 
 @router.get("/loads")
-def list_loads(user: User = Depends(staff), db: Session = Depends(get_db)):
+def list_loads(request: Request, user: User = Depends(staff), db: Session = Depends(get_db)):
+    session_id = normalize_session_id(request.headers.get("X-Demo-Session"))
     loads = db.scalars(select(DigitalLoad).order_by(DigitalLoad.id))
-    return [ser_load_row(db, l) for l in loads]
+    return [ser_load_row(db, l) for l in loads if is_load_in_session(db, l.id, session_id)]
 
 
 @router.get("/loads/{load_id}")
@@ -42,7 +43,7 @@ def load_detail(load_id: str, user: User = Depends(staff), db: Session = Depends
         for c in crews:
             w = db.get(Worker, c.worker_id)
             if w:
-                crew.append({"id": w.id, "name": w.name, "role": c.role_in_crew})
+                crew.append({"id": w.id, "name": w.name, "role": c.role_in_crew.split(":")[0]})
     return {
         **ser_load_row(db, load),
         "crew": crew,

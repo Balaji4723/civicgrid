@@ -2,7 +2,7 @@
 they are independent for (enforced from the data in audits.py, not from the role name)."""
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,6 +15,7 @@ from ..db import get_db
 from ..errors import ServiceError
 from ..independence import auditor_violations, get_parties
 from ..models import (Audit, AuditMethod, AuditSelectionRun, AuditStatus, DigitalLoad, EvidenceCategory, EvidenceSide, Evidence, Role, User)
+from ..services import is_load_in_session, normalize_session_id
 from .evidence import limit_body
 
 router = APIRouter(prefix="/audit-center", tags=["audit center"])
@@ -72,8 +73,9 @@ def config(user: User = Depends(staff)):
 
 
 @router.get("/summary")
-def summary(user: User = Depends(staff), db: Session = Depends(get_db)):
-    rows = [a for a in db.scalars(select(Audit)) if _visible(db, user, a)]
+def summary(request: Request, user: User = Depends(staff), db: Session = Depends(get_db)):
+    session_id = normalize_session_id(request.headers.get("X-Demo-Session"))
+    rows = [a for a in db.scalars(select(Audit)) if _visible(db, user, a) and is_load_in_session(db, a.load_id, session_id)]
     by = lambda f: {k: sum(1 for a in rows if f(a) == k) for k in sorted({f(a) for a in rows})}
     return {"total": len(rows), "by_status": by(lambda a: a.status.value), "by_method": by(lambda a: a.method.value)}
 
@@ -103,9 +105,10 @@ def manual_audit(body: ManualIn, user: User = Depends(operator), db: Session = D
 
 
 @router.get("/audits")
-def list_audits(status: Optional[AuditStatus] = None, method: Optional[AuditMethod] = None,
+def list_audits(request: Request, status: Optional[AuditStatus] = None, method: Optional[AuditMethod] = None,
                 target_type: Optional[str] = None,
                 user: User = Depends(staff), db: Session = Depends(get_db)):
+    session_id = normalize_session_id(request.headers.get("X-Demo-Session"))
     stmt = select(Audit).order_by(Audit.id.desc())
     if status:
         stmt = stmt.where(Audit.status == status)
@@ -118,7 +121,7 @@ def list_audits(status: Optional[AuditStatus] = None, method: Optional[AuditMeth
             stmt = stmt.where(Audit.target_type == tt)
         except ValueError:
             pass
-    return [svc.ser_audit(db, a, user) for a in db.scalars(stmt) if _visible(db, user, a)]
+    return [svc.ser_audit(db, a, user) for a in db.scalars(stmt) if _visible(db, user, a) and is_load_in_session(db, a.load_id, session_id)]
 
 
 @router.get("/audits/{audit_id}")

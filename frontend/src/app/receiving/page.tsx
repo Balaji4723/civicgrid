@@ -40,7 +40,6 @@ interface ReceiveResult {
 export default function ReceivingOperationsPage() {
   const loads = useLoad(() => api<LoadRow[]>("/loads"));
   const [selectedLoadId, setSelectedLoadId] = useState<string | null>(null);
-  const detail = useLoad(() => api<LoadDetail>(`/loads/${selectedLoadId}`), [selectedLoadId], !!selectedLoadId);
 
   // Weighbridge inputs (Gross - Tare = Net)
   const [grossWeight, setGrossWeight] = useState("8720");
@@ -61,8 +60,8 @@ export default function ReceivingOperationsPage() {
   const receivedLoads = (loads.data ?? []).filter((l) => l.status !== "COLLECTING" && l.status !== "DECLARED");
 
   // Auto-select first incoming load if none selected
-  const activeLoad = detail.data ?? (incomingLoads.length > 0 ? null : null);
   const activeLoadId = selectedLoadId || (incomingLoads.length > 0 ? incomingLoads[0].id : null);
+  const detail = useLoad(() => api<LoadDetail>(`/loads/${activeLoadId}`), [activeLoadId], !!activeLoadId);
 
   function selectLoad(id: string) {
     setSelectedLoadId(id);

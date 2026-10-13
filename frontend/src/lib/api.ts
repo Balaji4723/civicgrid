@@ -2,11 +2,20 @@ import type { User } from "./types";
 
 export function getApiBaseUrl(): string {
   if (process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL;
+    return process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, "");
   }
   if (typeof window !== "undefined") {
     const host = window.location.hostname;
-    return `http://${host}:8000`;
+    const isLocal =
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      /^192\.168\./.test(host) ||
+      /^10\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+    if (isLocal) {
+      return `http://${host}:8000`;
+    }
+    return window.location.origin;
   }
   return "http://localhost:8000";
 }
@@ -42,10 +51,27 @@ export const session = {
   },
 };
 
+export function getDemoSessionId(): string | null {
+  if (typeof window === "undefined") return null;
+  const key = "civicgrid_demo_session_id";
+  try {
+    let sid = window.localStorage.getItem(key);
+    if (!sid) {
+      sid = `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+      window.localStorage.setItem(key, sid);
+    }
+    return sid;
+  } catch {
+    return null;
+  }
+}
+
 async function send(path: string, init: { method: string; body?: BodyInit; json?: boolean }): Promise<Response> {
   const headers: Record<string, string> = {};
   const token = session.token();
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  const demoSid = getDemoSessionId();
+  if (demoSid) headers["X-Demo-Session"] = demoSid;
   if (init.json) headers["Content-Type"] = "application/json";   // never set for FormData: the browser adds the multipart boundary
   const baseUrl = getApiBaseUrl();
   try {

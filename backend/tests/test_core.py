@@ -174,3 +174,59 @@ def test_role_guards(client):
     c = login(client, "citizen1")
     assert client.get("/citizen/me", headers=c).json()["civic_credits"] == 120
     assert client.post("/citizen/sanitation-reports", json={"description": "Overflowing bin near gate 2"}, headers=c).status_code == 200
+
+
+def test_multi_device_session_isolation(client, facility):
+    w = login(client, "worker1")
+    dev_a = {**w, "X-Demo-Session": "device_alpha_01"}
+    dev_b = {**w, "X-Demo-Session": "device_bravo_02"}
+    fac_a = {**facility, "X-Demo-Session": "device_alpha_01"}
+    fac_b = {**facility, "X-Demo-Session": "device_bravo_02"}
+
+    # Device A starts with a clean 0/6 PENDING shift (does not see seeded active DL-1022)
+    route_a = client.get("/worker/route", headers=dev_a).json()
+    assert route_a["active_load"] is None
+    assert route_a["trip"]["status"] == "IN_PROGRESS"
+    assert all(h["status"] == "PENDING" for h in route_a["households"])
+
+    # Device A marks all 6 households and completes trip without weight
+    for h in route_a["households"]:
+        r = client.post("/worker/collections", json={"household_id": h["id"], "status": "SEGREGATED"}, headers=dev_a)
+        assert r.status_code == 200, r.text
+    comp_a = client.post("/worker/trip/complete", json={}, headers=dev_a)
+    assert comp_a.status_code == 200, comp_a.text
+    load_a_id = comp_a.json()["id"]
+    assert comp_a.json()["status"] == "DECLARED"
+    assert comp_a.json()["declared_quantity"] is None
+
+    # Refreshing on Device A preserves completed trip and DECLARED load
+    refresh_a = client.get("/worker/route", headers=dev_a).json()
+    assert refresh_a["trip"]["status"] == "COMPLETED"
+    assert refresh_a["active_load"]["id"] == load_a_id
+    assert refresh_a["active_load"]["status"] == "DECLARED"
+    assert all(h["status"] == "SEGREGATED" for h in refresh_a["households"])
+
+    # Device B opens /worker/route concurrently -> gets its own clean 0/6 PENDING shift!
+    route_b = client.get("/worker/route", headers=dev_b).json()
+    assert route_b["active_load"] is None
+    assert route_b["trip"]["status"] == "IN_PROGRESS"
+    assert route_b["trip"]["id"] != refresh_a["trip"]["id"]
+    assert all(h["status"] == "PENDING" for h in route_b["households"])
+
+    # Device B does NOT see Device A's load in /loads or /worker/history
+    loads_a = [l["id"] for l in client.get("/loads", headers=fac_a).json()]
+    loads_b = [l["id"] for l in client.get("/loads", headers=fac_b).json()]
+    assert load_a_id in loads_a
+    assert load_a_id not in loads_b
+    assert "DL-1022" not in loads_a and "DL-1022" not in loads_b
+
+    hist_a = [t["load_id"] for t in client.get("/worker/history", headers=dev_a).json()]
+    hist_b = [t["load_id"] for t in client.get("/worker/history", headers=dev_b).json()]
+    assert load_a_id in hist_a
+    assert load_a_id not in hist_b
+
+    # Receiving facility on Device A receives load_a_id
+    rec_a = client.post(f"/loads/{load_a_id}/receiving", json={"quantity": 390, "condition": "UNACCEPTABLE"}, headers=fac_a)
+    assert rec_a.status_code == 200, rec_a.text
+    assert rec_a.json()["cross_check_result"] == "FLAGGED"
+
