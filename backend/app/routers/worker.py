@@ -9,7 +9,7 @@ from ..auth import require_roles
 from ..db import get_db
 from ..errors import ServiceError
 from ..models import (
-    Audit, AuditStatus, CollectionEvent, CollectionStatus, CollectionTrip, DigitalLoad, Household, Role, Route, TripCrew, User, Vehicle, Worker,
+    Audit, AuditStatus, CollectionEvent, CollectionStatus, CollectionTrip, DigitalLoad, Household, LoadStatus, Role, Route, TripCrew, User, Vehicle, Worker,
 )
 from ..serializers import iso, ser_load_row
 from ..services import (
@@ -42,11 +42,31 @@ class CheckAuditIn(BaseModel):
 
 
 @router.get("/worker/route")
-def my_route(user: User = Depends(worker_only), db: Session = Depends(get_db)):
+def my_route(
+    new_shift: bool = False,
+    user: User = Depends(worker_only),
+    db: Session = Depends(get_db),
+):
     w = _worker(db, user)
     route = db.get(Route, w.assigned_route_id)
     load = active_load_for_route(db, route.id)
     trip = active_trip_for_route(db, route.id)
+    if not trip and not load and not new_shift:
+        latest_trip = db.scalars(
+            select(CollectionTrip)
+            .where(CollectionTrip.route_id == route.id)
+            .order_by(CollectionTrip.id.desc())
+        ).first()
+        if latest_trip and latest_trip.status == "COMPLETED":
+            declared_load = db.scalars(
+                select(DigitalLoad).where(
+                    DigitalLoad.trip_id == latest_trip.id,
+                    DigitalLoad.status == LoadStatus.DECLARED,
+                )
+            ).first()
+            if declared_load:
+                trip = latest_trip
+                load = declared_load
     if not trip:
         trip = get_or_create_active_trip(db, route.id, w.id)
         db.commit()

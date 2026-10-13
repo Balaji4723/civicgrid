@@ -144,7 +144,7 @@ def test_mixed_load_rejected_by_facility_is_not_a_mismatch():
 def test_live_path_worker_to_receiving_triggers_crosscheck(client, facility):
     w = login(client, "worker1")
     route = client.get("/worker/route", headers=w).json()
-    assert route["active_load"] is None
+    assert route["active_load"] is None or route["active_load"]["id"] == "DL-1022"
     for h in route["households"]:
         r = client.post("/worker/collections", json={"household_id": h["id"], "status": "SEGREGATED"}, headers=w)
         if r.status_code == 409:
@@ -157,6 +157,11 @@ def test_live_path_worker_to_receiving_triggers_crosscheck(client, facility):
     load_id = client.get("/worker/route", headers=w).json()["active_load"]["id"]
     assert client.post(f"/loads/{load_id}/receiving", json={"quantity": 100, "condition": "ACCEPTABLE"}, headers=facility).status_code == 409  # not declared yet
     assert client.post(f"/loads/{load_id}/declare", json={"declared_quantity_kg": 600}, headers=w).status_code == 200
+    after_declare = client.get("/worker/route", headers=w).json()
+    assert after_declare["trip"]["status"] == "COMPLETED"
+    assert after_declare["active_load"]["id"] == load_id
+    assert after_declare["active_load"]["status"] == "DECLARED"
+    assert all(h["status"] == "SEGREGATED" for h in after_declare["households"])
     r = client.post(f"/loads/{load_id}/receiving", json={"quantity": 380, "condition": "ACCEPTABLE"}, headers=facility).json()
     assert r["cross_check_result"] == "FLAGGED" and r["discrepancies"][0]["status"] == "FLAGGED" and r["discrepancies"][0]["type"] == "QUANTITY"
     assert client.get(f"/loads/{load_id}/verify-integrity", headers=facility).json()["valid"] is True

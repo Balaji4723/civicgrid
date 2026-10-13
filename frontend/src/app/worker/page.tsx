@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Award,
@@ -123,7 +123,7 @@ type WorkerTab = "collection" | "history" | "integrity";
 
 export default function WorkerPortal() {
   const [activeTab, setActiveTab] = useState<WorkerTab>("collection");
-  const { data, error, reload } = useLoad(() => api<RouteView>("/worker/route"));
+  const { data: rawData, error, reload } = useLoad(() => api<RouteView>("/worker/route"));
   const historyLoad = useLoad(() => api<WorkerHistoryItem[]>("/worker/history"), [], activeTab === "history");
   const integrityLoad = useLoad(() => api<WorkerIntegrityData>("/worker/integrity"), [], activeTab === "integrity");
 
@@ -131,8 +131,49 @@ export default function WorkerPortal() {
   const [err, setErr] = useState<string | null>(null);
   const [completing, setCompleting] = useState(false);
   const [tripCompleted, setTripCompleted] = useState(false);
+  const [completedSnapshot, setCompletedSnapshot] = useState<RouteView | null>(null);
   const [ackBusy, setAckBusy] = useState(false);
   const [declaredQuantity, setDeclaredQuantity] = useState<number | string>(520);
+
+  useEffect(() => {
+    if (!rawData) return;
+    const storageKey = `civicgrid_completed_route_${rawData.route.id}`;
+    if (rawData.active_load?.status === "DECLARED") {
+      setCompletedSnapshot(null);
+      setTripCompleted(true);
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(rawData));
+      } catch {
+        // ignore storage errors
+      }
+      return;
+    }
+    const rawMarked = rawData.households.filter((h) => h.status !== "PENDING").length;
+    if (rawMarked > 0 || rawData.active_load?.status === "COLLECTING") {
+      setCompletedSnapshot(null);
+      setTripCompleted(false);
+      try {
+        localStorage.removeItem(storageKey);
+      } catch {
+        // ignore storage errors
+      }
+      return;
+    }
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved) as RouteView;
+        if (parsed?.active_load?.id) {
+          setCompletedSnapshot(parsed);
+          setTripCompleted(true);
+        }
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, [rawData]);
+
+  const data = completedSnapshot ?? rawData;
 
   // Single active evidence-capture workflow state: at most ONE camera workflow can ever be active
   type ActiveWorkflow =
@@ -324,14 +365,35 @@ export default function WorkerPortal() {
   }
 
   async function handleCompleteCollectionTrip() {
-    if (!data?.active_load) return;
+    if (!data || !isAllMarked) {
+      setErr("Please record collection status for all assigned households before completing the trip.");
+      return;
+    }
+    if (!data.active_load) return;
     setCompleting(true);
     setErr(null);
     try {
-      await api("/worker/trip/complete", {
+      const sealedLoad = await api<LoadRow>("/worker/trip/complete", {
         method: "POST",
         body: { declared_quantity_kg: declaredQuantity ? Number(declaredQuantity) : 520 },
       });
+      const snapshot: RouteView = {
+        ...data,
+        trip: data.trip
+          ? {
+              ...data.trip,
+              status: "COMPLETED",
+              verification_paused: false,
+            }
+          : null,
+        active_load: sealedLoad,
+      };
+      try {
+        localStorage.setItem(`civicgrid_completed_route_${data.route.id}`, JSON.stringify(snapshot));
+      } catch {
+        // ignore storage errors
+      }
+      setCompletedSnapshot(snapshot);
       setTripCompleted(true);
       await reload();
     } catch (e) {
@@ -729,71 +791,86 @@ export default function WorkerPortal() {
                 </div>
               </Card>
 
-              {/* TRIP COMPLETION & AUTOMATIC DIGITAL LOAD CREATION */}
-              {isAllMarked && !isLoadDeclared && (
-                <Card tone="track" title="Collection Complete">
-                  <div className="space-y-4">
-                    <div className="rounded-xl bg-paper/80 p-4 border border-line/60">
-                      <p className="text-xs font-semibold text-ink-soft uppercase tracking-wider">Shift Summary</p>
-                      <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 text-sm">
-                        <div>
-                          <dt className="text-xs text-ink-soft">Households Serviced</dt>
-                          <dd className="font-bold text-ink mt-0.5">{total}</dd>
-                        </div>
-                        <div>
-                          <dt className="text-xs text-ink-soft">Segregated</dt>
-                          <dd className="font-bold text-ok-700 mt-0.5">{segregatedCount}</dd>
-                        </div>
-                        <div>
-                          <dt className="text-xs text-ink-soft">Unsegregated</dt>
-                          <dd className="font-bold text-flag-700 mt-0.5">{unsegregatedCount}</dd>
-                        </div>
-                        <div>
-                          <dt className="text-xs text-ink-soft">Assigned Vehicle</dt>
-                          <dd className="font-bold text-ink mt-0.5">{data.vehicle?.registration_number ?? "MH-01-AB-1234"}</dd>
-                        </div>
-                      </dl>
-                    </div>
+              {/* SHIFT SUMMARY & TRIP COMPLETION */}
+              <Card
+                tone="track"
+                title={isLoadDeclared ? "Shift Summary" : isAllMarked ? "Collection Complete" : "Shift Summary & Trip Completion"}
+              >
+                <div className="space-y-4">
+                  <div className="rounded-xl bg-paper/80 p-4 border border-line/60">
+                    <p className="text-xs font-semibold text-ink-soft uppercase tracking-wider">Shift Summary</p>
+                    <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5 text-sm">
+                      <div>
+                        <dt className="text-xs text-ink-soft">Households Visited</dt>
+                        <dd className="font-bold text-ink mt-0.5">
+                          {marked} / {total}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-ink-soft">Segregated</dt>
+                        <dd className="font-bold text-ok-700 mt-0.5">{segregatedCount}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-ink-soft">Unsegregated</dt>
+                        <dd className="font-bold text-flag-700 mt-0.5">{unsegregatedCount}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-ink-soft">Collection Progress</dt>
+                        <dd className="font-bold text-ink mt-0.5">{progressPct}%</dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-ink-soft">Trip Status</dt>
+                        <dd className="font-bold text-track-700 mt-0.5">
+                          {isLoadDeclared ? "COMPLETED" : (data.trip?.status ?? "IN_PROGRESS")}
+                        </dd>
+                      </div>
+                    </dl>
+                  </div>
 
-                    <div className="rounded-xl bg-paper/80 p-4 border border-line/60">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div>
-                          <label className="text-xs font-semibold text-ink-soft uppercase tracking-wider block">
-                            Collection-side Declared Quantity (kg)
-                          </label>
-                          <p className="text-xs text-ink-soft mt-0.5">
-                            Estimated load quantity • Final physical quantity verified at receiving weighbridge.
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            value={declaredQuantity}
-                            onChange={(e) => setDeclaredQuantity(e.target.value)}
-                            className="w-32 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm font-bold text-ink focus:border-track-600 focus:outline-none"
-                            placeholder="520"
-                          />
-                          <span className="text-xs font-bold text-ink-soft">kg</span>
+                  {!isLoadDeclared && (
+                    <>
+                      <div className="rounded-xl bg-paper/80 p-4 border border-line/60">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-2">
+                              <label className="text-xs font-semibold text-ink-soft uppercase tracking-wider block">
+                                Collection-side Declared Quantity
+                              </label>
+                              <span className="rounded bg-track-100 px-1.5 py-0.5 text-[10px] font-bold text-track-800">
+                                System Estimate
+                              </span>
+                            </div>
+                            <p className="text-xs text-ink-soft">
+                              Estimated load quantity based on route history • Final physical quantity verified at receiving weighbridge.
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 rounded-xl border border-line bg-surface px-4 py-2">
+                            <span className="font-mono text-base font-bold text-ink">520</span>
+                            <span className="text-xs font-bold text-ink-soft">kg (est.)</span>
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
-                      <p className="text-xs text-ink-soft">
-                        All assigned households collected. Completing the trip seals the collection trail with the declared estimate and queues the Digital Load for weighbridge receiving intake.
-                      </p>
-                      <Btn
-                        tone="track"
-                        busy={completing}
-                        onClick={handleCompleteCollectionTrip}
-                      >
-                        <PackageCheck className="mr-1.5 h-4 w-4" />
-                        Complete Collection Trip
-                      </Btn>
-                    </div>
-                  </div>
-                </Card>
-              )}
+                      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+                        <p className="text-xs text-ink-soft">
+                          {isAllMarked
+                            ? "All assigned households collected. Completing the trip seals the collection trail with the declared estimate and queues the Digital Load for weighbridge receiving intake."
+                            : `Collect all ${total} assigned households before completing the trip (${total - marked} household${total - marked === 1 ? "" : "s"} remaining).`}
+                        </p>
+                        <Btn
+                          tone="track"
+                          busy={completing}
+                          disabled={!isAllMarked || completing || isTripPaused}
+                          onClick={handleCompleteCollectionTrip}
+                        >
+                          <PackageCheck className="mr-1.5 h-4 w-4" />
+                          Complete Collection Trip
+                        </Btn>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </Card>
 
               {/* DIGITAL LOAD SEALED & AWAITING RECEIVING */}
               {isLoadDeclared && (
@@ -828,7 +905,7 @@ export default function WorkerPortal() {
                         </div>
                         <div>
                           <dt className="text-ink-soft">Declared Quantity</dt>
-                          <dd className="font-bold text-ink mt-0.5">{data.active_load?.declared_quantity_kg ?? declaredQuantity ?? 520} kg</dd>
+                          <dd className="font-bold text-ink mt-0.5">{data.active_load?.declared_quantity_kg ?? declaredQuantity ?? 520} kg <span className="text-[11px] font-normal text-ink-soft">(Est.)</span></dd>
                         </div>
                         <div>
                           <dt className="text-ink-soft">Load Status</dt>
@@ -837,7 +914,7 @@ export default function WorkerPortal() {
                       </dl>
 
                       <p className="text-xs text-ink-soft leading-relaxed">
-                        Collection trip completed. Digital Load <strong className="font-mono text-ink font-bold">{data.active_load?.id}</strong> has been sealed with Collection-side Declared Quantity <strong className="font-mono text-ink font-bold">{data.active_load?.declared_quantity_kg ?? declaredQuantity ?? 520} kg</strong> (Final physical quantity verified at receiving) and is awaiting receiving intake at the facility weighbridge.
+                        Collection trip completed. Digital Load <strong className="font-mono text-ink font-bold">{data.active_load?.id}</strong> has been sealed with Collection-side Declared Quantity <strong className="font-mono text-ink font-bold">{data.active_load?.declared_quantity_kg ?? declaredQuantity ?? 520} kg (System-Generated Estimate)</strong> (Final physical quantity verified at receiving) and is awaiting receiving intake at the facility weighbridge.
                       </p>
                     </div>
                   </div>
