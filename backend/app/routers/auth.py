@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import current_user, make_token, verify_password
+from ..auth import check_login_rate_limit, current_user, make_token, record_failed_login, record_successful_login, verify_password
 from ..db import get_db
 from ..models import User
 
@@ -11,8 +13,8 @@ router = APIRouter(tags=["auth"])
 
 
 class LoginIn(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=60)
+    password: str = Field(min_length=1, max_length=128)
 
 
 def ser_user(u: User) -> dict:
@@ -21,13 +23,26 @@ def ser_user(u: User) -> dict:
             "capability": u.capability}
 
 
-
 @router.post("/auth/login")
-def login(body: LoginIn, db: Session = Depends(get_db)):
-    user = db.execute(select(User).where(User.username == body.username)).scalar_one_or_none()
+def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
+    client_ip = request.client.host if (request and request.client) else "127.0.0.1"
+    rate_key = f"{client_ip}:{body.username.strip().lower()}"
+    check_login_rate_limit(rate_key)
+
+    user = db.execute(select(User).where(User.username == body.username.strip())).scalar_one_or_none()
     if not user or not verify_password(body.password, user.password_hash):
+        record_failed_login(rate_key)
         raise HTTPException(401, {"error": "BAD_CREDENTIALS", "message": "Wrong username or password."})
-    return {"access_token": make_token(user), "token_type": "bearer", "user": ser_user(user)}
+
+    record_successful_login(rate_key)
+    from ..sessions import get_or_create_session_for_login, current_session_id
+    session_id = current_session_id.get() or get_or_create_session_for_login(request)
+    return {
+        "access_token": make_token(user, session_id=session_id),
+        "token_type": "bearer",
+        "user": ser_user(user),
+        "session_id": session_id,
+    }
 
 
 @router.get("/me")

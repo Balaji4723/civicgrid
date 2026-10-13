@@ -245,9 +245,9 @@ def seed_scenarios(db, workers) -> None:
             append_event(db, lid, "DISCREPANCY_FLAGGED", {"discrepancy_id": disc_stream.id, "type": "STREAM"}, actor="system:crosscheck", now=disc_stream.created_at)
             append_event(db, lid, "DISCREPANCY_CLOSED", {"discrepancy_id": disc_stream.id, "resolution": "Settled"}, actor="municipal_admin:1", now=disc_stream.resolved_at)
 
-    # ---- 5. 30 Historical Completed Audits (AU-1 through AU-30)
+    # ---- 5. 30 Historical Completed Audits (AU-1 through AU-30) on DL-1004 through DL-1021
     for a_idx in range(1, 31):
-        target_lid = f"DL-{1001 + (a_idx % 21)}"
+        target_lid = f"DL-{1004 + (a_idx % 18)}"
         t_aud = now - timedelta(days=30 - a_idx, hours=5)
         audit = Audit(
             target_type=AuditTargetType.DIGITAL_LOAD,

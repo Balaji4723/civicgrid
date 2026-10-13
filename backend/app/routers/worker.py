@@ -371,10 +371,10 @@ def evidence_requests(request: Request, user: User = Depends(worker_only), db: S
         if not is_load_in_session(db, load.id, session_id):
             continue
         audit = db.scalars(select(Audit).where(Audit.load_id == load.id, Audit.status.in_([AuditStatus.PENDING, AuditStatus.IN_PROGRESS]))).first()
-        for d in db.scalars(select(DiscrepancyEvent).where(DiscrepancyEvent.load_id == load.id).order_by(DiscrepancyEvent.id)):
+        for d in db.scalars(select(DiscrepancyEvent).where(DiscrepancyEvent.load_id == load.id, DiscrepancyEvent.status.notin_([DiscrepancyStatus.RESOLVED, DiscrepancyStatus.CLOSED])).order_by(DiscrepancyEvent.id)):
             mine = db.scalar(select(func.count()).select_from(Evidence).where(Evidence.discrepancy_id == d.id, Evidence.uploader_id == user.id,
                                                                             Evidence.kind == EvidenceKind.FILE_EVIDENCE)) or 0
             out.append({"load_id": load.id, "discrepancy_id": d.id, "type": d.type.value, "status": d.status.value,
-                        "accepting_evidence": d.status not in (DiscrepancyStatus.RESOLVED, DiscrepancyStatus.CLOSED), "my_files": mine,
+                        "accepting_evidence": True, "my_files": mine,
                         "audit": {"id": audit.id, "status": audit.status.value, "method": audit.method.value} if audit else None})
     return out

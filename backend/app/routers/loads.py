@@ -25,8 +25,11 @@ class ReceivingIn(BaseModel):
 
 @router.get("/loads")
 def list_loads(request: Request, user: User = Depends(staff), db: Session = Depends(get_db)):
-    session_id = normalize_session_id(request.headers.get("X-Demo-Session"))
-    loads = db.scalars(select(DigitalLoad).order_by(DigitalLoad.id))
+    from ..sessions import current_session_id
+    session_id = current_session_id.get() or normalize_session_id(request.headers.get("X-Demo-Session"))
+    from ..models import LoadStatus
+    stmt = select(DigitalLoad).where(DigitalLoad.status != LoadStatus.COLLECTING).order_by(DigitalLoad.id)
+    loads = db.scalars(stmt)
     return [ser_load_row(db, l) for l in loads if is_load_in_session(db, l.id, session_id)]
 
 

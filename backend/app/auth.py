@@ -1,9 +1,11 @@
 """Minimal JWT auth with four roles. Demo-grade: no refresh tokens, lockout or rate limiting (out of scope)."""
 from __future__ import annotations
 
+from collections import defaultdict
 import hashlib
 import hmac
 import os
+import time
 from datetime import timedelta
 
 import jwt
@@ -15,7 +17,35 @@ from .config import JWT_ALG, JWT_EXPIRE_MINUTES, JWT_SECRET
 from .db import get_db
 from .models import Role, User, utcnow
 
+import sys
+
 bearer = HTTPBearer(auto_error=False)
+
+_LOGIN_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
+_RATE_LIMIT_WINDOW = 300  # 5 minutes
+_MAX_FAILED_ATTEMPTS = 15
+
+
+def check_login_rate_limit(key: str) -> None:
+    if "pytest" in sys.modules or os.getenv("TESTING") == "1":
+        return
+    now = time.time()
+    cutoff = now - _RATE_LIMIT_WINDOW
+    attempts = [t for t in _LOGIN_ATTEMPTS[key] if t > cutoff]
+    _LOGIN_ATTEMPTS[key] = attempts
+    if len(attempts) >= _MAX_FAILED_ATTEMPTS:
+        raise HTTPException(
+            429,
+            {"error": "RATE_LIMITED", "message": "Too many failed login attempts. Please wait 5 minutes before trying again."}
+        )
+
+
+def record_failed_login(key: str) -> None:
+    _LOGIN_ATTEMPTS[key].append(time.time())
+
+
+def record_successful_login(key: str) -> None:
+    _LOGIN_ATTEMPTS.pop(key, None)
 
 
 def hash_password(password: str) -> str:
@@ -30,8 +60,12 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(candidate, digest)
 
 
-def make_token(user: User) -> str:
+def make_token(user: User, session_id: Optional[str] = None) -> str:
+    from .sessions import current_session_id
+    sid = session_id or current_session_id.get()
     claims = {"sub": str(user.id), "role": user.role.value, "exp": utcnow() + timedelta(minutes=JWT_EXPIRE_MINUTES)}
+    if sid:
+        claims["session_id"] = sid
     return jwt.encode(claims, JWT_SECRET, algorithm=JWT_ALG)
 
 

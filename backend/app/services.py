@@ -18,10 +18,12 @@ from .models import (
 )
 
 
-def normalize_session_id(session_id: Optional[str]) -> Optional[str]:
-    if not session_id:
+def normalize_session_id(session_id: Optional[str] = None) -> Optional[str]:
+    from .sessions import current_session_id
+    sid = session_id or current_session_id.get()
+    if not sid:
         return None
-    cleaned = re.sub(r"[^a-zA-Z0-9_-]", "", session_id.strip())[:32]
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]", "", str(sid).strip())[:32]
     return cleaned or None
 
 
@@ -30,7 +32,7 @@ def crew_role_for_session(session_id: Optional[str]) -> str:
     return f"CREW_LEAD:{sid}" if sid else "CREW_LEAD"
 
 
-def is_load_in_session(db: Session, load_id: Optional[str], session_id: Optional[str]) -> bool:
+def is_load_in_session(db: Session, load_id: Optional[str], session_id: Optional[str] = None) -> bool:
     if not load_id:
         return True
     try:
@@ -49,15 +51,6 @@ def is_load_in_session(db: Session, load_id: Optional[str], session_id: Optional
     )
     if not has_crew:
         return False
-    if not sid and load.generated_at:
-        gen_dt = load.generated_at
-        now_dt = utcnow()
-        if gen_dt.tzinfo is None and now_dt.tzinfo is not None:
-            now_dt = now_dt.replace(tzinfo=None)
-        elif gen_dt.tzinfo is not None and now_dt.tzinfo is None:
-            gen_dt = gen_dt.replace(tzinfo=None)
-        if (now_dt - gen_dt).total_seconds() > 300:
-            return False
     return True
 
 

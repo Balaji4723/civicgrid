@@ -40,8 +40,12 @@ def fresh_db():
         pass
     names = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
     with engine.begin() as conn:
+        conn.execute(text("SET search_path TO public"))
         conn.execute(text(f"TRUNCATE TABLE {names} RESTART IDENTITY CASCADE"))
+    from app.sessions import reset_session_schemas
+    reset_session_schemas(engine)
     with SessionLocal() as db:
+        db.execute(text("SET search_path TO public"))
         workers = seed.seed_reference_data(db)
         seed.seed_scenarios(db, workers)
     yield

@@ -37,7 +37,9 @@ def ser_load_row(db: Session, load: DigitalLoad) -> dict:
         "vehicle_id": load.vehicle_id, "vehicle_registration": veh.registration_number if veh else None,
         "vehicle_type": veh.vehicle_type if veh else None,
         "status": load.status.value,
-        "generated_at": iso(load.generated_at), "declared_quantity_kg": load.declared_quantity_kg,
+        "generated_at": iso(load.generated_at),
+        "declared_quantity": load.declared_quantity_kg,
+        "declared_quantity_kg": load.declared_quantity_kg,
         "discrepancy_count": disc,
     }
 
